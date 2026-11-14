@@ -63,7 +63,8 @@
 
 - `serviceUuid = Guid('4553')`（不变）
 - `txCharUuid = Guid('494d')`（写）、`rxCharUuid = Guid('4553')`（notify；与 service 同值，设备实测如此）
-- 删除 ESTKme `_claim()` / `_powerOn()`；建链后发一帧控制命令 `04 05 00 00 70 00 00 01`（对应 APK `h()` 的第一帧）。设备实测回 `04 02 00 69 88`，接受任意合法帧即可
+- 删除 ESTKme `_claim()` / `_powerOn()`；改为 **APK `q()` 的两条 `cmd=0x02` 设备码握手帧**：`02 | 08 00 | 02 05 + "eSIM-H"` 与 `02 | 06 00 | <持久 install id 后 6 字符>`，第二条期望 `02 00 00`。bleak 实测补上握手后 `AF 50 00 00 09` 从 `6988` 变 `9000`（固件 v109/109、mode=0）
+- **不在连接阶段发 `00 70 00 00 01`**：那是标准 MANAGE CHANNEL APDU，由 `BaseAdapter.openLogicalChannel`（`euicc_adapter.dart:558`）负责；`BaseChannel.transmit`（:255）自动给 CLA 带通道号。第一版误在 `connect()` 里抢发，已删除
 - `lastAtr => null`（设备不提供 ATR）
 - 分片写入强制 `withoutResponse: true` + 15 ms 间隔（对齐 APK 的 `WRITE_TYPE_NO_RESPONSE`）。`writeBleChunks` 在特征同时支持 `write` 时会选带响应写入，故本 adapter 自己分片
 - `sendRawApdu` / `_transmit` / `openChannel` 保持与 RED 一致
@@ -104,7 +105,8 @@ BleReaderKind(
 
 | 项 | 状态 |
 |---|---|
-| 建链控制帧 `00 70 00 00 01` 是否必需 | 未确认（实测设备回 `6988`）；第一版保留，不通则去掉 |
+| ~~建链控制帧~~ | 已定位：不该由 adapter 发，交给 `BaseAdapter.openLogicalChannel`；第一版误发已删除 |
+| 设备码握手是否被 App 侧 BLE 竞争干扰 | 首轮实机（v2.5.0 b606）报 `E:19` / 不支持该卡；多 central 时设备响应串帧，需退出 App 后复测 |
 | `write-without-response` + 15 ms | 对齐 APK；`writeBleChunks` 默认 8 ms 且可能选带响应写入，故自写 |
 | `withKeywords` 在 Windows FBP 后端的行为 | 即使关键词过滤不生效，`matchService`（广播带 0x4553）仍能让设备显示 |
 | 私有 overlay / `GM_PSK_URL` | 公开仓库可构建 community 版；`GM_PSK_URL` 仅 dart-define，不影响编译 |

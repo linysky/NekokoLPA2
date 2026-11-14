@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:ble/ble.dart';
 import 'package:logging/logging.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../euicc_adapter.dart';
 import '../../utils/error_codes.dart';
@@ -36,6 +37,8 @@ class FoesimBleAdapter extends BaseAdapter implements BleAdapter {
   final Guid serviceUuid = Guid('4553');
   final Guid txCharUuid = Guid('494d');
   final Guid rxCharUuid = Guid('4553');
+
+  static const String _installIdKey = 'foesim_ble_install_id';
 
   final StreamController<EuiccPortState> _stateController =
       StreamController<EuiccPortState>.broadcast();
@@ -105,15 +108,26 @@ class FoesimBleAdapter extends BaseAdapter implements BleAdapter {
         reportConnectStep(ReaderConnectStep.enablingNotifications);
         await _rxChar!.setNotifyValue(true);
 
-        // The vendor app opens its logical channel with this control frame
-        // before issuing SELECT AID. A real reader answers with a short
-        // status frame (observed: 04 02 00 69 88). Any well-formed frame is
-        // accepted here; the APDU layer handles the actual status word.
+        // Vendor handshake, reverse-engineered from the FOESIM app's q().
+        // Without these two cmd=0x02 frames the reader rejects every card
+        // APDU with 6988. MANAGE CHANNEL / SELECT AID are handled later by
+        // BaseAdapter.openLogicalChannel -- do not send them here.
         reportConnectStep(ReaderConnectStep.initializing);
         await _transmit(
-          0x04,
-          Uint8List.fromList(<int>[0x00, 0x70, 0x00, 0x00, 0x01]),
+          0x02,
+          Uint8List.fromList(<int>[0x02, 0x05, ...'eSIM-H'.codeUnits]),
         );
+        final ack = await _transmit(
+          0x02,
+          Uint8List.fromList((await _installIdSuffix()).codeUnits),
+        );
+        if (ack.length < 3 || ack[0] != 0x02 || ack[1] != 0 || ack[2] != 0) {
+          throw AppException(
+            AppErrorCode.ERROR_BLUETOOTH_CONNECT_FAILED,
+            message: 'FOESIM reader rejected the device id',
+          );
+        }
+        log.info('FOESIM BLE handshake complete');
 
         _stateController.add(EuiccPortState.open);
       } catch (e) {
@@ -209,6 +223,19 @@ class FoesimBleAdapter extends BaseAdapter implements BleAdapter {
       await _rxSub?.cancel();
       _rxSub = null;
     }
+  }
+
+  /// The vendor app sends the last six characters of a persisted install id
+  /// in the second handshake frame. Keep one per install so the reader keeps
+  /// seeing the same id across sessions.
+  Future<String> _installIdSuffix() async {
+    final prefs = await SharedPreferences.getInstance();
+    var id = prefs.getString(_installIdKey);
+    if (id == null || id.length < 6) {
+      id = DateTime.now().microsecondsSinceEpoch.toRadixString(16);
+      await prefs.setString(_installIdKey, id);
+    }
+    return id.substring(id.length - 6);
   }
 
   /// The vendor app always writes without response, 15 ms between slices.
