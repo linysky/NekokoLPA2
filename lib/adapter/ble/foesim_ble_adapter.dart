@@ -68,16 +68,11 @@ class FoesimBleAdapter extends BaseAdapter implements BleAdapter {
       try {
         await connectBleDevice(_device!, log, progress: connectProgress);
 
-        await _connSub?.cancel();
-        _connSub = _device!.connectionState.listen((state) {
-          if (state == BluetoothConnectionState.disconnected) {
-            log.warning('FOESIM BLE disconnected unexpectedly');
-            _txChar = null;
-            _rxChar = null;
-            updateConnectedReader(null);
-            _stateController.add(EuiccPortState.closed);
-          }
-        });
+        // NOTE: do not subscribe to connectionState here. On Windows the
+        // flutter_blue_plus WinRT backend emits a transient `disconnected`
+        // while CCCD is being subscribed, which would clear the two
+        // characteristics before the handshake and make _transmit throw
+        // "FOESIM BLE not connected". Disconnect is handled by disconnect().
 
         reportConnectStep(ReaderConnectStep.discoveringServices);
         final services = await _device!.discoverServices();
@@ -121,11 +116,15 @@ class FoesimBleAdapter extends BaseAdapter implements BleAdapter {
           0x02,
           Uint8List.fromList((await _installIdSuffix()).codeUnits),
         );
-        if (ack.length < 3 || ack[0] != 0x02 || ack[1] != 0 || ack[2] != 0) {
-          throw AppException(
-            AppErrorCode.ERROR_BLUETOOTH_CONNECT_FAILED,
-            message: 'FOESIM reader rejected the device id',
-          );
+        // The reader acknowledges a known install id with 02 00 00, but a
+        // fresh/unknown id answers with a status frame (02 02 00 6988).
+        // Do not hard-fail here: the card path is what actually matters, and
+        // BaseAdapter's MANAGE CHANNEL will surface a real failure if the
+        // handshake did not unlock the reader.
+        if (ack.length >= 3 && ack[0] == 0x02 && ack[1] == 0 && ack[2] == 0) {
+          log.info('FOESIM BLE handshake acknowledged (02 00 00)');
+        } else {
+          log.warning('FOESIM BLE handshake status frame: ${ack.length} bytes');
         }
         log.info('FOESIM BLE handshake complete');
 
