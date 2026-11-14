@@ -173,6 +173,16 @@ class FoesimBleAdapter extends BaseAdapter implements BleAdapter {
     });
   }
 
+  /// BaseAdapter.sendApdu routes through ApduChainer, which appends Le=0x00
+  /// to any command without an explicit Le. This reader drops the link when
+  /// TERMINAL CAPABILITY (80 AA ...) carries that extra byte -- measured on
+  /// hardware: 15-byte command answers 9000, the same command plus 0x00
+  /// times out and disconnects. Send framework-level APDUs verbatim.
+  @override
+  Future<Uint8List> sendApdu(Uint8List apdu) async {
+    return await runExclusive(() async => await sendRawApdu(apdu));
+  }
+
   @override
   Future<Uint8List> sendRawApdu(Uint8List apdu) async {
     // 04 | LEN | APDU  ->  CMD | LEN | DATA+SW
