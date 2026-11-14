@@ -93,23 +93,46 @@ BleReaderKind(
 - 首轮全平台 CI（run `43565704412`）因 `dart:math` 顶层 `log` 遮蔽 `BaseAdapter.log`，产生 8 个编译错误导致全平台失败；已改为 `import 'dart:math' as math` 修复
 - 公开仓库不含私有 branding overlay，产物为 community 构建
 
-## 4. 验证（只读，不动 profile）
+## 4. 验证结果（2026-11-14 实机，v6 / commit `b323424`）
 
-1. 装 CI 产出的 Windows 包
-2. 扫描 → 应出现 `FOESIM: eSIM-BLE-398DD535`
-3. 连接 → 检查 `Found characteristics - TX/RX` 日志与建链控制帧响应
-4. `Chip info` 读 EID、`Profiles` 列表
-5. 若 SELECT AID 失败：优先去掉/调整建链控制帧，或按 APK 的 `00 70 80 00 <chan>` 补关通道逻辑
+**通过**：GitHub Actions Windows 包静默安装 → 扫描出现 `FOESIM: eSIM-BLE-398DD535` → 连接 →
+读 EID → 列出 profile。界面显示 EID `89049032…7187821357`、剩余 **833.88 KB**、profile
+`ESIM_ACCES…`（Singtel，ICCID `8965012606160924300`，~18 KB，已启用）。
 
-## 5. 风险 / 待联调
+日志尾部（APDU 原始日志开启）：`[CH 1] >> 81e2910003bf2b00` → `<< 6105` →
+`[CH 1] >> 81c0000005` → `<< bf2b02a0009000` → `Closing logical channel 1...` →
+`Logical channel 1 closed.` —— 完整走完 SGP.22 读 EID + 列 profile。
 
-| 项 | 状态 |
-|---|---|
-| ~~建链控制帧~~ | 已定位：不该由 adapter 发，交给 `BaseAdapter.openLogicalChannel`；第一版误发已删除 |
-| 设备码握手是否被 App 侧 BLE 竞争干扰 | 首轮实机（v2.5.0 b606）报 `E:19` / 不支持该卡；多 central 时设备响应串帧，需退出 App 后复测 |
-| `write-without-response` + 15 ms | 对齐 APK；`writeBleChunks` 默认 8 ms 且可能选带响应写入，故自写 |
-| `withKeywords` 在 Windows FBP 后端的行为 | 即使关键词过滤不生效，`matchService`（广播带 0x4553）仍能让设备显示 |
-| 私有 overlay / `GM_PSK_URL` | 公开仓库可构建 community 版；`GM_PSK_URL` 仅 dart-define，不影响编译 |
+### 调试中定位并修掉的 4 个根因（全部 bleak 帧级复现）
+
+| # | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | 所有卡 APDU 被 `6988` 挡（`E:19` / 不支持该卡） | 缺 APK `q()` 的两条 `cmd=0x02` 设备码握手帧 | adapter 加握手 |
+| 2 | 补握手后仍被拒 | 设备**绑定配对 id**：实测只有 `ABC123` 拿到 `02 00 00` 并开通道，`ABC124`/`abc123`/`5e1ac5`/`123456` 全被 `6988` 拒 | `shared_preferences` 的 install id 设为设备认的值 |
+| 3 | `FOESIM BLE not connected` | Windows WinRT 在订阅 CCCD 时推一次瞬时 `disconnected`，`connectionState` 监听把 `_txChar/_rxChar` 置空，随后 `_transmit` 守卫抛错 | 删掉该监听；disconnect 交给显式 `disconnect()` |
+| 4 | 15 秒超时 → 回退通道 0 → `No supported AID found` | `ApduChainer` 给无 Le 命令自动补 `0x00`；TERMINAL CAPABILITY `80AA…0107` 15 字节回 `9000`，多一个 `00` 的 16 字节版**沉默并断链** | `FoesimBleAdapter.sendApdu` override，框架级 APDU 原样发送，绕过 chainer |
+
+另：notify 改为**一次常驻订阅 + 共享缓冲**——FBP 每次 `onValueReceived.listen` 会重放上一次值，
+逐请求订阅会把旧帧混进下一次响应、污染 SW。
+
+### 支撑性排除（实机对照，非推测）
+
+- `80 AA` TERMINAL CAPABILITY 前缀：带/不带都能开通道、SELECT 成功
+- `cleanupChannels` 的 3 条 `00 70 80 00 0x`：带/不带都返回 `9000`
+- MANAGE CHANNEL 的 Le=`00` / `01`：都返回 `01 90 00`
+- SELECT 末尾 Le=`00` / `FF` / 不带：都返回 `61 21`，GET RESPONSE 读回 ISD-R FCI
+  `6F1F 84 10 A0000005591010FFFFFFFF8900000100 … 9000`
+
+## 5. 本机环境改动（可回滚）
+
+`%APPDATA%/ee.nekoko/NekokoLPA 2/shared_preferences.json`：
+
+| 键 | 值 | 说明 |
+|---|---|---|
+| `flutter.foesim_ble_install_id` | `ABC123` | 原值 `6603bdf5e1ac5`，备份 `.bak-foesim-20261114` |
+| `flutter.enableCcidConnector` | `false` | 避免电脑自带 PC/SC 读卡器抢默认选中 |
+| `flutter.lastSelectedReader` | `foesim_ble: eSIM-BLE-398DD535|E8:05:ED:E5:63:FC` | 默认选中 |
+| `flutter.developerModeEnabled` / `showLogConsole` / `enableApduLogging` | `true` | 诊断用，可关 |
 
 ## 6. 不做的事
 
