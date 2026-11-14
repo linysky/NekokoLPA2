@@ -5,6 +5,7 @@ import 'bee_sim_plugin.dart';
 import 'esim_cc_plugin.dart';
 import 'esim_gg_plugin.dart';
 import 'estk_plugin.dart';
+import 'foesim_ble_plugin.dart';
 import 'gm_plugin.dart';
 import 'nekoko_stats_plugin.dart';
 import 'thk_plugin.dart';
@@ -26,6 +27,7 @@ class BuildPluginRegistry {
         'EsimCcPlugin': EsimCcPlugin.new,
         'EsimGgPlugin': EsimGgPlugin.new,
         'EstkPlugin': EstkPlugin.new,
+        'FoesimBlePlugin': FoesimBlePlugin.new,
         'NekokoStatsPlugin': NekokoStatsPlugin.new,
         'ThkPlugin': ThkPlugin.new,
         'TyBlePlugin': TyBlePlugin.new,
