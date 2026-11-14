@@ -28,7 +28,13 @@ class FoesimBleAdapter extends BaseAdapter implements BleAdapter {
   BluetoothCharacteristic? _txChar;
   BluetoothCharacteristic? _rxChar;
   StreamSubscription? _rxSub;
-  StreamSubscription? _connSub;
+
+  // A single, long-lived notification subscription. Re-subscribing per
+  // request makes flutter_blue_plus replay the last value on each listen,
+  // which mixes a stale frame into the next response and corrupts the SW.
+  final List<int> _rxBuffer = <int>[];
+  Completer<Uint8List>? _pendingResponse;
+  int _expectedFrameLength = -1;
 
   // On-device GATT (bleak, E8:05:ED:E5:63:FC):
   //   service 00004553-...
@@ -102,6 +108,8 @@ class FoesimBleAdapter extends BaseAdapter implements BleAdapter {
 
         reportConnectStep(ReaderConnectStep.enablingNotifications);
         await _rxChar!.setNotifyValue(true);
+        await _rxSub?.cancel();
+        _rxSub = _rxChar!.onValueReceived.listen(_onNotification);
 
         // Vendor handshake, reverse-engineered from the FOESIM app's q().
         // Without these two cmd=0x02 frames the reader rejects every card
@@ -152,8 +160,9 @@ class FoesimBleAdapter extends BaseAdapter implements BleAdapter {
       log.info('Disconnecting from FOESIM BLE device...');
       await _rxSub?.cancel();
       _rxSub = null;
-      await _connSub?.cancel();
-      _connSub = null;
+      _pendingResponse = null;
+      _rxBuffer.clear();
+      _expectedFrameLength = -1;
       await _device?.disconnect();
       _device = null;
       _txChar = null;
@@ -193,21 +202,10 @@ class FoesimBleAdapter extends BaseAdapter implements BleAdapter {
     header[2] = (payloadLen >> 8) & 0xFF;
     final request = Uint8List.fromList(<int>[...header, ...?payload]);
 
+    _rxBuffer.clear();
+    _expectedFrameLength = -1;
     final completer = Completer<Uint8List>();
-    final buffer = <int>[];
-    var expectedLength = -1;
-
-    _rxSub = _rxChar!.onValueReceived.listen((data) {
-      buffer.addAll(data);
-      if (expectedLength == -1 && buffer.length >= 3) {
-        expectedLength = buffer[1] + (buffer[2] << 8) + 3;
-      }
-      if (expectedLength != -1 &&
-          buffer.length >= expectedLength &&
-          !completer.isCompleted) {
-        completer.complete(Uint8List.fromList(buffer));
-      }
-    });
+    _pendingResponse = completer;
 
     try {
       await _writeChunks(request);
@@ -219,8 +217,21 @@ class FoesimBleAdapter extends BaseAdapter implements BleAdapter {
         ),
       );
     } finally {
-      await _rxSub?.cancel();
-      _rxSub = null;
+      _pendingResponse = null;
+    }
+  }
+
+  void _onNotification(List<int> data) {
+    _rxBuffer.addAll(data);
+    if (_expectedFrameLength < 0 && _rxBuffer.length >= 3) {
+      _expectedFrameLength = _rxBuffer[1] + (_rxBuffer[2] << 8) + 3;
+    }
+    final pending = _pendingResponse;
+    if (pending != null &&
+        _expectedFrameLength > 0 &&
+        _rxBuffer.length >= _expectedFrameLength &&
+        !pending.isCompleted) {
+      pending.complete(Uint8List.fromList(_rxBuffer));
     }
   }
 
