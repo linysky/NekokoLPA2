@@ -1,0 +1,63 @@
+# FOESIM fork: Windows-only build.
+# The upstream build.yml builds every platform; this one exists so the FOESIM
+# BLE adapter can be iterated on quickly without waiting for / being blocked by
+# Android, Linux and web jobs. Portable zip is the required artifact; the Inno
+# Setup installer is best-effort.
+
+name: Build Windows (FOESIM)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'lib/adapter/ble/foesim_ble_adapter.dart'
+      - 'lib/plugins/foesim_ble_plugin.dart'
+      - 'lib/plugins/build_plugin_registry.dart'
+      - '.github/workflows/windows-foesim.yml'
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: 3.47.2
+
+jobs:
+  windows:
+    name: Build Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - run: flutter build windows --release --dart-define=APP_VARIANT=std --dart-define=GM_PSK_URL=https://key.9esim.com/psk
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path build\windows\x64\runner\Release\* `
+            -DestinationPath dist\NekokoLPA2-foesim-windows-x64.zip -Force
+      - name: Build Inno Setup installer (optional)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path pubspec.yaml -Pattern '^version:\s*(\S+)').Matches.Groups[1].Value
+          $name = ($version -split '\+')[0]
+          $build = ($version -split '\+')[1]
+          if (-not $build) { $build = "0" }
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe" }
+          & $iscc /DAppVersion=$name /DAppBuildNumber=$build installer\installer.iss
+          $expected = "build\windows\installer\ee.nekoko.nlpa2.windows-$name-$build-setup.exe"
+          if (Test-Path $expected) {
+            Copy-Item $expected dist\NekokoLPA2-foesim-windows-setup.exe
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-foesim
+          path: dist/*
+          if-no-files-found: error

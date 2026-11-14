@@ -85,10 +85,11 @@ BleReaderKind(
 
 ## 3. 构建与交付
 
-- **触发**：push 到 fork 的 **`release` 分支**（`build.yml` 的 `on.push.branches: [release]`；push 到 `master` **不会**触发），或手动 `workflow_dispatch`
-- `windows` job：`runs-on: windows-latest` → `flutter build windows --release --dart-define=APP_VARIANT=std …` → `Compress-Archive` + Inno Setup `setup.exe` → `actions/upload-artifact@v4`，artifact 名 `windows`
-- 产物：`ee.nekoko.nlpa2.windows-<version>-x64.zip` / `-setup.exe`
-- 注意 `android` job（community flavor）会跑 `dart analyze` + `flutter test`，新增代码必须通过静态分析
+- **Windows-only workflow**：`.github/workflows/windows-foesim.yml`。push 到 `master` 且改动命中 FOESIM 相关路径即自动触发，也可 `workflow_dispatch`；只跑 `windows` job，其他平台不构建（主人 2026-11-14 定：优先 Windows，其他稍后）
+- 上游 `build.yml` 保留不动（全平台，`on.push.branches: [release]`）
+- 构建：`runs-on: windows-latest` → `flutter build windows --release --dart-define=APP_VARIANT=std …` → `Compress-Archive` 出 portable zip（Inno Setup `setup.exe` 为 best-effort）→ `actions/upload-artifact@v4`，artifact 名 `windows-foesim`
+- 产物：`NekokoLPA2-foesim-windows-x64.zip`（+ 可选 `NekokoLPA2-foesim-windows-setup.exe`）
+- 首轮全平台 CI（run `43565704412`）因 `dart:math` 顶层 `log` 遮蔽 `BaseAdapter.log`，产生 8 个编译错误导致全平台失败；已改为 `import 'dart:math' as math` 修复
 - 公开仓库不含私有 branding overlay，产物为 community 构建
 
 ## 4. 验证（只读，不动 profile）

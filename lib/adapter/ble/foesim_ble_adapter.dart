@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:math';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:ble/ble.dart';
@@ -14,7 +14,7 @@ import 'ble_transport_utils.dart';
 ///
 /// It uses the same framed APDU tunnel as ESTKme-RED:
 ///
-///   0x04 | len_lo | len_hi | <payload>
+///   0x04 | len_lo | len_hi | `<payload>`
 ///
 /// but with a different characteristic layout and no Claim/PowerOn handshake.
 /// Verified against a real reader on 2026-11-13; see docs/TECHNICAL_DESIGN.md.
@@ -217,7 +217,7 @@ class FoesimBleAdapter extends BaseAdapter implements BleAdapter {
   Future<void> _writeChunks(Uint8List data) async {
     final chunkSize = calculateBleWriteChunkSize(_device!.mtuNow);
     for (var offset = 0; offset < data.length; offset += chunkSize) {
-      final end = min(offset + chunkSize, data.length);
+      final end = math.min(offset + chunkSize, data.length);
       await _txChar!.write(
         Uint8List.sublistView(data, offset, end),
         withoutResponse: true,
